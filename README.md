@@ -25,9 +25,6 @@ SMART-HUNTER is an automated, Machine Learning-guided web vulnerability and pene
   - Performs intelligent WAF detection.
   - Conducts directory and file fuzzing utilizing **ffuf**.
 
-- **Interactive Command Injection Shell (`App.py`)**:
-  - A specific utility to brute force command injection vulnerabilities within forms and URL parameters.
-  - Capable of spawning an interactive command-line reverse shell upon successful exploitation.
 
 ## Requirements
 
@@ -60,15 +57,9 @@ python mchine.py
 ```
 *Ensure the Metasploit RPC daemon (`msfrpcd`) is running before launching this module.*
 
-### 3. Command Injection Hunter & Shell
-To quickly target a URL specifically for command injection and get an interactive shell upon compromise:
-```bash
-python App.py
-```
 
 ## Structure
 - `main.py`: Entry point for the ML-guided scanner.
-- `App.py`: Targeted command injection scanner and interactive shell client.
 - `URL_checkIfhaveVun.py`: Core logic for initiating vulnerability payload testing (XSS, SQLi, CMDi).
 - `url_connection.py`: Handles HTTP/S requests, site enumeration, WAF detection, and fuzzing execution.
 - `mchine.py`: The network scanning and automated Metasploit exploitation module.
@@ -76,3 +67,4 @@ python App.py
 
 ## Disclaimer
 This tool is intended for ethical hacking, security research, and authorized penetration testing only. Do not use this tool against targets without prior mutual consent. The authors and contributors are not responsible for any misuse, damage, or legal consequences caused by this software.
+
