@@ -302,14 +302,6 @@ class VulnerabilityCheckerTraining:
                     result['top_risk'] = name
 
             # Print summary
-            print(f"\n{'='*55}")
-            print(f"  ML VULNERABILITY PREDICTIONS")
-            print(f"{'='*55}")
-            sorted_preds = sorted(result['predictions'].items(), key=lambda x: x[1], reverse=True)
-            for name, prob in sorted_preds:
-                bar = '█' * int(prob * 20) + '░' * (20 - int(prob * 20))
-                lvl = '🔴 HIGH' if prob > 0.6 else '🟡 MED' if prob > 0.3 else '🟢 LOW'
-                print(f"  {name:25s} {bar} {prob:.1%}  {lvl}")
             print(f"{'='*55}")
             print(f"  Top risk: {result['top_risk']} ({result['top_confidence']:.1%})")
             print(f"{'='*55}\n")
@@ -435,7 +427,6 @@ class SmartVulnerabilityScanner(VulnerabilityCheckerTraining):
         params_to_test = {}
         forms_to_test = []
 
-        # Collect params from URL query string
         if p.query:
             params_to_test = urllib.parse.parse_qs(p.query)
 
@@ -775,6 +766,103 @@ def get_parameters(url):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Dual-Phase Prediction Helper
+# ═══════════════════════════════════════════════════════════════════════════
+
+def show_phase_prediction(scanner, phase: int, url: str, confirmed_vulns=None):
+    PHASE_LABELS = {
+        1:  "⚡ PHASE 1 — EARLY PREDICTION  (URL structure only, before recon)",
+        21: "🔬 PHASE 2A — RECON PREDICTION  (live features, after page fetch)",
+        22: "🎯 PHASE 2B — FINAL PREDICTION  (post-scan, confirmed results)",
+    }
+    WIDTH = 64
+
+    print(f"\n{'═'*WIDTH}")
+    print(f"  {PHASE_LABELS.get(phase, f'PHASE {phase}')}")
+    print(f"  Target : {url}")
+    print(f"{'═'*WIDTH}")
+
+    # ── Run prediction ────────────────────────────────────────────────────
+    if phase == 1:
+        features = scanner._url_only_features()
+        pred_label = "URL-only"
+    else:
+        features = scanner.extract_recon_features()
+        pred_label = "live-recon"
+
+    prediction = scanner.predict_vulnerability(features) if scanner.model else None
+    if not prediction:
+        print(f"  [-] No model available for {pred_label} prediction")
+        print(f"{'═'*WIDTH}\n")
+        return prediction
+
+    preds = prediction['predictions']
+
+    # ── Predicted Attack Path ─────────────────────────────────────────────
+    HIGH  = [n for n, p in preds.items() if p > 0.55]
+    MED   = [n for n, p in preds.items() if 0.25 < p <= 0.55]
+    LOW   = [n for n, p in preds.items() if p <= 0.25]
+
+    ATTACK_PATH_MAP = {
+        'sql_injection':     ['Enumerate DB tables', 'Dump credentials', 'Bypass auth'],
+        'xss':               ['Steal session cookies', 'Phishing / redirect', 'DOM manipulation'],
+        'command_injection': ['RCE via OS commands', 'Reverse shell', 'File exfiltration'],
+    }
+
+    print(f"\n  {'VULNERABILITY':<28} {'CONFIDENCE':>10}   RISK")
+    print(f"  {'─'*56}")
+    for name, prob in sorted(preds.items(), key=lambda x: x[1], reverse=True):
+        bar  = '█' * int(prob * 20) + '░' * (20 - int(prob * 20))
+        lvl  = '🔴 HIGH' if prob > 0.55 else '🟡 MED ' if prob > 0.25 else '🟢 LOW '
+        print(f"  {name:<28} {bar} {prob:>5.1%}  {lvl}")
+
+    print(f"\n  ── PREDICTED ATTACK PATHS {'─'*34}")
+    if HIGH:
+        print(f"  🔴 HIGH-RISK PATHS (attack immediately):")
+        for vuln in HIGH:
+            for step in ATTACK_PATH_MAP.get(vuln, []):
+                print(f"      → [{vuln}] {step}")
+    if MED:
+        print(f"  🟡 MEDIUM-RISK PATHS (verify then exploit):")
+        for vuln in MED:
+            for step in ATTACK_PATH_MAP.get(vuln, []):
+                print(f"      → [{vuln}] {step}")
+    if LOW:
+        print(f"  🟢 LOW-RISK (monitor / skip):")
+        for vuln in LOW:
+            print(f"      → [{vuln}] {preds[vuln]:.1%} confidence")
+
+    # ── Phase-2B: overlay confirmed scan results ──────────────────────────
+    if phase == 22 and confirmed_vulns:
+        print(f"\n  ── CONFIRMED FINDINGS vs PREDICTION {'─'*26}")
+        confirmed_types = {}
+        for v in confirmed_vulns:
+            t = v.get('type', '')
+            if 'sql' in t.lower():     confirmed_types['sql_injection'] = confirmed_types.get('sql_injection', 0) + 1
+            elif 'xss' in t.lower():   confirmed_types['xss'] = confirmed_types.get('xss', 0) + 1
+            elif 'cmd' in t.lower() or 'command' in t.lower(): confirmed_types['command_injection'] = confirmed_types.get('command_injection', 0) + 1
+
+        for vuln_name, count in confirmed_types.items():
+            predicted_p = preds.get(vuln_name, 0)
+            tag = '✅ CONFIRMED' if predicted_p > 0.25 else '⚠️  SURPRISE'
+            print(f"  {tag}  {vuln_name:<28} {count} finding(s)  (predicted {predicted_p:.1%})")
+
+        missed = [n for n in preds if preds[n] > 0.4 and n not in confirmed_types]
+        for vuln_name in missed:
+            print(f"  ❌ MISSED     {vuln_name:<28} predicted {preds[vuln_name]:.1%} — not confirmed")
+
+        # Final recommended paths based on confirmed results
+        print(f"\n  ── FINAL EXPLOIT PATHS (based on confirmed results) {'─'*11}")
+        for vuln_name, count in confirmed_types.items():
+            print(f"  🎯 [{vuln_name.upper()}] — {count} confirmed vector(s):")
+            for step in ATTACK_PATH_MAP.get(vuln_name, []):
+                print(f"      → {step}")
+
+    print(f"{'═'*WIDTH}\n")
+    return prediction
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 def main():
     # 1) Train / load model
     trainer = VulnerabilityCheckerTraining()
@@ -794,29 +882,55 @@ def main():
         get_parameters(Target)
         print(f"\n[*] Target URL: {Target}")
 
-        # Run smart ML prediction first
+        # ── Build scanner & load/train model ───────────────────────────
         scanner = SmartVulnerabilityScanner(Target)
-        scanner.load_model(MODEL_FILE)
-        quick_vulns = scanner.smart_vulnerability_scan(MODEL_FILE)
+        if not scanner.load_model(MODEL_FILE):
+            print("[*] No saved model — training fresh...")
+            scanner.train_model()
+            scanner.save_model(MODEL_FILE)
 
-        # Run full recon
+
+        print("\n" + "*"*64)
+        print("*  VULNERABILITY PREDICTION PHASE 1: PRE-RECON START")
+        print("*  (Two predictions before any testing begins)")
+        print("*"*64)
+        phase1_pred = show_phase_prediction(scanner, phase=1, url=Target)
+
         if url_connection.MainRecon(Target):
             print("\n[+] Recon complete, running full vulnerability scan...")
-            URL_checkIfhaveVun.MainestVuln(Target)
 
-        # Summary
-        print(f"\n{'='*60}")
-        print(f"  SCAN COMPLETE")
-        print(f"{'='*60}")
-        print(f"  Quick scan vulnerabilities: {len(quick_vulns)}")
+     
+        print("\n[*] Running ML-guided active vulnerability tests...")
+        quick_vulns = scanner.smart_vulnerability_scan(MODEL_FILE)
+
+        URL_checkIfhaveVun.MainestVuln(Target)
+
+   
+        print("\n" + "*"*64)
+        print("*  VULNERABILITY PREDICTION PHASE 2: POST-TESTING")
+        print("*  (Two predictions after all testing & recon complete)")
+        print("*"*64)
+
+        phase2a_pred = show_phase_prediction(scanner, phase=21, url=Target)
+
+        phase2b_pred = show_phase_prediction(scanner, phase=22, url=Target,
+                                              confirmed_vulns=quick_vulns)
+
+        # ── Summary ─────────────────────────────────────────────────────
+        print(f"\n{'═'*64}")
+        print(f"  SCAN COMPLETE — FULL SUMMARY")
+        print(f"{'═'*64}")
+        print(f"  Active scan findings : {len(quick_vulns)}")
         for v in quick_vulns:
-            print(f"    [{v['confidence'].upper()}] {v['type']} → param:{v['parameter']}")
-        if scanner.prediction:
-            print(f"\n  ML Risk Assessment:")
-            for name, prob in sorted(scanner.prediction['predictions'].items(),
-                                      key=lambda x: x[1], reverse=True):
-                print(f"    {name:25s} {prob:.1%}")
-        print(f"{'='*60}")
+            print(f"    [{v['confidence'].upper():6}] {v['type']:<35} param: {v['parameter']}")
+        if phase1_pred and phase2a_pred:
+            print(f"\n  Prediction Δ (Phase1 → Phase2A):")
+            for name in phase1_pred['predictions']:
+                p1 = phase1_pred['predictions'].get(name, 0)
+                p2 = phase2a_pred['predictions'].get(name, 0)
+                arrow = '▲' if p2 > p1 else ('▼' if p2 < p1 else '─')
+                print(f"    {name:<28} {p1:.1%} {arrow} {p2:.1%}")
+        print(f"{'═'*64}")
 
     # 4) IP target
     else:
