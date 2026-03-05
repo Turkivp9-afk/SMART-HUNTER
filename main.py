@@ -1,12 +1,11 @@
 import re, os, time, subprocess, traceback, warnings,sys
-import numpy as np, pandas as pd, joblib, httpx, urllib.parse, requests
+import numpy as np, pandas as pd, joblib, httpx, urllib.parse, requests,ipaddress
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 from sklearn.preprocessing import StandardScaler
 import URL_checkIfhaveVun, url_connection, mchine
-
 
 msg = r"""
       ___           _              _   _               _   _                     
@@ -523,7 +522,7 @@ class SmartVulnerabilityScanner(VulnerabilityCheckerTraining):
                 for payload, ptype in payloads:
                     tasks.append(('form', param, payload, ptype, form))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             for res in executor.map(_worker_sqli, tasks):
                 if res and res['parameter'] not in [v['parameter'] for v in vulns]:
                     vulns.append(res)
@@ -535,7 +534,7 @@ class SmartVulnerabilityScanner(VulnerabilityCheckerTraining):
                 for payload, ptype in time_payloads:
                     time_tasks.append((param, payload, ptype))
                     
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             for res in executor.map(_time_worker_sqli, time_tasks):
                 if res and res['parameter'] not in [v['parameter'] for v in vulns]:
                     vulns.append(res)
@@ -609,7 +608,7 @@ class SmartVulnerabilityScanner(VulnerabilityCheckerTraining):
                 for payload, ptype in payloads:
                     tasks.append(('form', param, payload, ptype, form))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             for res in executor.map(_worker_xss, tasks):
                 if res and res['parameter'] not in [v['parameter'] for v in vulns]:
                     vulns.append(res)
@@ -695,7 +694,7 @@ class SmartVulnerabilityScanner(VulnerabilityCheckerTraining):
                 for payload in payloads:
                     tasks.append(('form', param, payload, form))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             for res in executor.map(_worker_cmd, tasks):
                 if res and res['parameter'] not in [v['parameter'] for v in vulns]:
                     vulns.append(res)
@@ -707,7 +706,7 @@ class SmartVulnerabilityScanner(VulnerabilityCheckerTraining):
                 for payload, ptype in time_payloads:
                     time_tasks.append((param, payload, ptype))
                     
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             for res in executor.map(_time_worker_cmd, time_tasks):
                 if res and res['parameter'] not in [v['parameter'] for v in vulns]:
                     vulns.append(res)
@@ -922,7 +921,8 @@ def main():
         print(f"{'═'*64}")
         print(f"  Active scan findings : {len(quick_vulns)}")
         for v in quick_vulns:
-            print(f"    [{v['confidence'].upper():6}] {v['type']:<35} param: {v['parameter']}")
+            finding_type = "VULNERABILITY" if v.get('confidence', '').lower() == 'high' else "ISSUE"
+            print(f"    [{finding_type:13}] [{v.get('confidence', 'unknown').upper():6}] {v.get('type', ''):<35} param: {v.get('parameter', '')}")
         if phase1_pred and phase2a_pred:
             print(f"\n  Prediction Δ (Phase1 → Phase2A):")
             for name in phase1_pred['predictions']:
@@ -934,9 +934,12 @@ def main():
 
     # 4) IP target
     else:
-        print(f"[*] Target IP: {Target}")
-        mchine.MainPenTest(Target)
-
+        try:
+            ipaddress.ip_address(Target)
+            print(f"[*] Target IP: {Target}")
+            mchine.MainPenTest(Target)
+        except ValueError:
+            print(f"[-] Invalid target: {Target}")
 
 
 if __name__ == "__main__":

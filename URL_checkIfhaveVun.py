@@ -620,7 +620,7 @@ class URLVulnerabilityChecker:
     def _make_request(self, url, method='get', params=None, data=None):
         """Safe request wrapper with timeout and error handling."""
         try:
-            kw = {'timeout': 8, 'verify': False, 'allow_redirects': True,
+            kw = {'timeout': 5, 'verify': False, 'allow_redirects': True,
                   'headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}}
             if method == 'post':
                 return requests.post(url, data=data, **kw)
@@ -706,7 +706,7 @@ class URLVulnerabilityChecker:
                 pass
             return None
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
             for res in executor.map(_worker, tasks):
                 if res and res['parameter'] not in [v['parameter'] for v in vulns]:
                     vulns.append(res)
@@ -770,7 +770,7 @@ class URLVulnerabilityChecker:
                 pass
             return None
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
             for res in executor.map(_worker, tasks):
                 if res and res['parameter'] not in [v['parameter'] for v in vulns]:
                     vulns.append(res)
@@ -849,7 +849,7 @@ class URLVulnerabilityChecker:
                 pass
             return None
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
              for res in executor.map(_worker, tasks):
                  if res and not any(v['parameter'] == res['parameter'] and v['type'] == res['type'] for v in vulns):
                      vulns.append(res)
@@ -962,10 +962,10 @@ class URLVulnerabilityChecker:
                 print("\n[!] No vuln dataset yet"); return
             df = pd.read_csv(VULN_ML_DATASET_FILE)
             print(f"\n[+] VULN DATASET: {len(df)} scans | {df['url'].nunique()} targets | "
-                  f"avg vulns {df['total_vulnerabilities'].mean():.1f} | "
-                  f"SQLi {df['has_sql_injection'].mean():.1%} | "
-                  f"XSS {df['has_xss'].mean():.1%} | "
-                  f"CmdInj {df['has_command_injection'].mean():.1%}")
+                  f"avg vulns {df['total_vulnerabilities'].mean():.1f} | avg issues {df.get('total_issues', pd.Series(dtype=float)).mean():.1f} | "
+                  f"SQLi (Vuln) {df['has_sql_injection'].mean():.1%} | "
+                  f"XSS (Vuln) {df['has_xss'].mean():.1%} | "
+                  f"CmdInj (Vuln) {df['has_command_injection'].mean():.1%}")
         except Exception as e:
             print(f"[-] Dataset stats error: {e}")
 
@@ -987,18 +987,23 @@ class URLVulnerabilityChecker:
 
     def extract_vulnerability_features(self, url, scan_results=None):
         p = urllib.parse.urlparse(url)
-        vt = [v['type'].lower() for v in self.vulnerabilities_found]
-        print(f"[DEBUG] Vulns: {len(vt)} — {vt}")
+        vulnerabilities = [v for v in self.vulnerabilities_found if v.get('confidence', '').lower() == 'high']
+        issues = [v for v in self.vulnerabilities_found if v.get('confidence', '').lower() != 'high']
+        vt_all = [v['type'].lower() for v in self.vulnerabilities_found]
+        vt_vuln = [v['type'].lower() for v in vulnerabilities]
+        print(f"[DEBUG] Vulns (High Confidence): {len(vt_vuln)} — {vt_vuln}")
+        print(f"[DEBUG] Issues (Med/Low Confidence): {len(issues)}")
 
-        def _has(k): return int(any(k in t for t in vt))
+        def _has(k): return int(any(k in t for t in vt_vuln))
         def _cnt(k): return sum(1 for v in self.vulnerabilities_found if k in v.get('tool','').lower())
 
-        ws = sum(next((w for sk, w in _SEV.items() if sk in t), 3) for t in vt)
-        total = len(self.vulnerabilities_found)
+        ws = sum(next((w for sk, w in _SEV.items() if sk in t), 3) for t in vt_all)
+        total_findings = len(self.vulnerabilities_found)
         features = {
             'scan_id': self.scan_id, 'url': url, 'domain': p.netloc,
             'timestamp': datetime.now().isoformat(),
-            'total_vulnerabilities': total,
+            'total_vulnerabilities': len(vulnerabilities),
+            'total_issues': len(issues),
             'has_sql_injection':    _has('sql'),
             'has_xss':              _has('xss'),
             'has_command_injection':_has('command'),
@@ -1042,14 +1047,15 @@ class URLVulnerabilityChecker:
         if scan_results: features.update(self._extract_scan_metrics(scan_results))
         inp = features.get('prev_input_count',1)
         features.update({
-            'vuln_density':            total / max(inp,1),
-            'tool_effectiveness':      (features['sqlmap_vulns_found']+features['dalfox_vulns_found']+features['commix_vulns_found']) / max(total,1),
+            'vuln_density':            features['total_vulnerabilities'] / max(inp,1),
+            'issue_density':           features['total_issues'] / max(inp,1),
+            'tool_effectiveness':      (features['sqlmap_vulns_found']+features['dalfox_vulns_found']+features['commix_vulns_found']) / max(total_findings,1),
             'security_risk_score':     (features['critical_vuln_count']*10 + features['high_vuln_count']*7) / 100.0,
-            'input_vulnerability_ratio':total / max(inp,1),
-            'previous_scan_accuracy':  int(features['used_previous_scan'] and total > 0),
+            'input_vulnerability_ratio':total_findings / max(inp,1),
+            'previous_scan_accuracy':  int(features['used_previous_scan'] and features['total_vulnerabilities'] > 0),
         })
-        print(f"[*] {len(features)} features — SQLi:{features['has_sql_injection']} XSS:{features['has_xss']} "
-              f"CmdInj:{features['has_command_injection']} Total:{total} Score:{ws}")
+        print(f"[*] {len(features)} features — SQLi (Vuln):{features['has_sql_injection']} XSS (Vuln):{features['has_xss']} "
+              f"CmdInj (Vuln):{features['has_command_injection']} Total Vulns:{features['total_vulnerabilities']} Total Issues:{features['total_issues']} Score:{ws}")
         self.save_vulnerability_dataset(features)
         return features
 
@@ -1071,25 +1077,27 @@ class URLVulnerabilityChecker:
     # ── Report ─────────────────────────────────────────────────────────────
     def generate_report(self, url):
         sep = '='*60
-        hdr = (f"\n{sep}\nVULNERABILITY ASSESSMENT REPORT\n{sep}\n"
+        hdr = (f"\n{sep}\nSECURITY ASSESSMENT REPORT\n{sep}\n"
                f"Target: {url}\nScan ID: {self.scan_id}\n"
                f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}\n"
                f"Tools: sqlmap, dalfox, commix\n"
-               f"Total Vulns: {len(self.vulnerabilities_found)}\n{sep}")
+               f"Total Findings: {len(self.vulnerabilities_found)}\n{sep}")
         print(hdr)
         lines = [hdr.replace('\n','',1)]
         if self.vulnerabilities_found:
-            print("\n[!] VULNERABILITIES FOUND:")
-            lines.append("VULNERABILITIES FOUND:")
+            print("\n[!] SECURITY FINDINGS:")
+            lines.append("SECURITY FINDINGS:")
             for i, v in enumerate(self.vulnerabilities_found, 1):
-                entry = (f"\n{i}. {v['type']}\n"
+                is_vuln = v.get('confidence', '').lower() == 'high'
+                finding_type = "VULNERABILITY" if is_vuln else "ISSUE"
+                entry = (f"\n{i}. [{finding_type}] {v.get('type', '')}\n"
                          f"   Parameter: {v.get('parameter','multiple')}\n"
                          f"   Payload: {v.get('payload','automated')}\n"
-                         f"   Evidence: {v['evidence']}\n"
+                         f"   Evidence: {v.get('evidence', '')}\n"
                          f"   Tool: {v.get('tool','manual')} | Conf: {v.get('confidence','medium')}")
                 print(entry); lines.append(entry + "\n" + "-"*50)
         else:
-            print("\n[+] No vulnerabilities detected"); lines.append("No vulnerabilities detected.")
+            print("\n[+] No findings detected"); lines.append("No findings detected.")
         rf = os.path.join(self.scan_dir, "vulnerability_report.txt")
         open(rf, 'w').write('\n'.join(lines))
         print(f"\n[+] Report → {rf}")
@@ -1189,11 +1197,12 @@ class URLVulnerabilityChecker:
 
         if builtin_vulns:
             self.vulnerabilities_found.extend(builtin_vulns)
-            print(f"\n[!] BUILT-IN CHECKS FOUND {len(builtin_vulns)} ISSUE(S):")
+            print(f"\n[!] BUILT-IN CHECKS FOUND {len(builtin_vulns)} FINDING(S):")
             for v in builtin_vulns:
-                print(f"    - [{v.get('confidence','?').upper()}] {v['type']} → {v.get('parameter','?')}")
+                finding_type = "VULN " if v.get('confidence', '').lower() == 'high' else "ISSUE"
+                print(f"    - [{finding_type}] [{v.get('confidence','?').upper()}] {v['type']} → {v.get('parameter','?')}")
         else:
-            print(f"\n[*] Built-in checks: no issues found")
+            print(f"\n[*] Built-in checks: no findings")
 
         # ── Phase 3: External tool checks (optional, may fail) ──
         print(f"\n{'='*60}\n  PHASE 3: EXTERNAL TOOL CHECKS\n{'='*60}")
