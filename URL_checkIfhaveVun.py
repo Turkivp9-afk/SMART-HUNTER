@@ -121,10 +121,10 @@ _REQUIRED_HEADERS = {
 class URLVulnerabilityChecker:
 # ═══════════════════════════════════════════════════════════════════════════
 
-    def __init__(self):
+    def __init__(self, scan_dir=None):
         self.vulnerabilities_found = []
         self.scan_id  = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.scan_dir = os.path.join(DATASET_DIR, f"vuln_scan_{self.scan_id}")
+        self.scan_dir = scan_dir if scan_dir else os.path.join(DATASET_DIR, f"vuln_scan_{self.scan_id}")
         os.makedirs(self.scan_dir, exist_ok=True)
         self.previous_scan_data = None
 
@@ -142,8 +142,9 @@ class URLVulnerabilityChecker:
         print("\n[+] Checking SQL Injection with SQLMap")
         if not shutil.which('sqlmap'):
             print("    [-] sqlmap not found in PATH"); return
+        sqli_file = os.path.join(self.scan_dir, "sqli_parameters.txt")
         try:
-            with open("sqli_parameters.txt") as f:
+            with open(sqli_file) as f:
                 urls = [l.strip() for l in f if l.strip()]
             if not urls: print("    [-] No URLs in sqli_parameters.txt"); return
             print(f"    [*] Testing {len(urls)} URL(s) in bulk mode")
@@ -151,7 +152,7 @@ class URLVulnerabilityChecker:
             out_dir = os.path.join(os.path.abspath(self.scan_dir), "sqlmap_results")
             os.makedirs(out_dir, exist_ok=True)
 
-            target_list = "sqli_parameters.txt"
+            target_list = sqli_file
             log_file = os.path.join(out_dir, "sqlmap.log")
             proc = subprocess.Popen(
                 ['sqlmap', '-m', target_list,
@@ -179,7 +180,7 @@ class URLVulnerabilityChecker:
             else:
                 print("    [-] Could not find SQLMap output dir")
         except FileNotFoundError:
-            print("    [-] sqli_parameters.txt not found")
+            print(f"    [-] sqli_parameters.txt not found at {sqli_file}")
         except Exception as e:
             print(f"    [-] Error: {e}")
 
@@ -321,7 +322,7 @@ class URLVulnerabilityChecker:
     # ── XSS / Dalfox ──────────────────────────────────────────────────────
     def check_xss_with_dalfox(self,
                                parallel_jobs: int = 5,
-                               url_timeout:   int = 60):
+                               url_timeout:   int = 3):
         """
         Fast XSS scan with dalfox.
         parallel_jobs  – how many URLs are scanned simultaneously
@@ -334,13 +335,14 @@ class URLVulnerabilityChecker:
         os.makedirs(self.scan_dir, exist_ok=True)
 
         # ── Load target URLs ──
+        xss_file = os.path.join(self.scan_dir, "xss_parameters.txt")
         try:
-            with open("xss_parameters.txt") as f:
+            with open(xss_file) as f:
                 urls = [l.strip() for l in f if l.strip()]
             if not urls:
                 print("    [-] No URLs in xss_parameters.txt"); return False
         except FileNotFoundError:
-            print("    [-] xss_parameters.txt not found"); return False
+            print(f"    [-] xss_parameters.txt not found at {xss_file}"); return False
         except Exception as e:
             print(f"    [-] Error reading xss_parameters.txt: {e}"); return False
 
@@ -356,11 +358,15 @@ class URLVulnerabilityChecker:
 
         cmd = ['dalfox', 'file', urls_file,
                '-w', str(parallel_jobs * 10),
+               '--timeout', str(url_timeout),
+               '--skip-mining-dom',
+               '--no-spinning',
                '--output', out_file]
         print(f"    [*] Command: {' '.join(cmd)}")
         print("    " + "-" * 50)
 
-        # ── Stream output live (no silent waiting) ──
+        # ── Stream output live with hard process timeout ──
+        total_timeout = url_timeout * max(len(urls), 1) + 30
         t0 = time.time()
         poc_live = 0
         try:
@@ -384,7 +390,15 @@ class URLVulnerabilityChecker:
                     print(f"        {line}")
                     if '[poc]' in ll:
                         poc_live += 1
-            proc.wait()
+                # Hard wall-clock kill
+                if time.time() - t0 > total_timeout:
+                    print(f"    [!] Hard timeout ({total_timeout}s) — killing dalfox")
+                    proc.kill()
+                    break
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
             elapsed = time.time() - t0
             print(f"    " + "-" * 50)
             print(f"    [*] Scan finished in {elapsed:.1f}s  rc={proc.returncode}")
@@ -481,9 +495,10 @@ class URLVulnerabilityChecker:
             print("    [-] commix not found in PATH"); return
         TIMEOUT = 3600
         try:
-            if not os.path.exists("rce_parameters.txt"):
+            rce_file = os.path.join(self.scan_dir, "rce_parameters.txt")
+            if not os.path.exists(rce_file):
                 print("    [-] rce_parameters.txt not found"); return
-            with open("rce_parameters.txt") as f:
+            with open(rce_file) as f:
                 urls = [l.strip() for l in f if l.strip()]
             if not urls: print("    [-] No URLs in rce_parameters.txt"); return
             print(f"    [*] {len(urls)} URLs | timeout: {TIMEOUT}s")
@@ -1160,7 +1175,7 @@ class URLVulnerabilityChecker:
             print(f"[-] Error: {e}")
             test_urls = [f"{url}?id=FUZZ", f"{url}?search=FUZZ"]
         for fn in ['xss_parameters.txt','sqli_parameters.txt','rce_parameters.txt']:
-            open(fn, 'w').write('\n'.join(test_urls))
+            open(os.path.join(self.scan_dir, fn), 'w').write('\n'.join(test_urls))
             print(f"[+] {fn}: {len(test_urls)} URLs")
         return test_urls
 
@@ -1185,7 +1200,7 @@ class URLVulnerabilityChecker:
         if not param_urls:
             param_urls = [f"{url}?id=FUZZ", f"{url}?search=FUZZ"]
         for fn in ['xss_parameters.txt', 'sqli_parameters.txt', 'rce_parameters.txt']:
-            open(fn, 'w').write('\n'.join(param_urls))
+            open(os.path.join(self.scan_dir, fn), 'w').write('\n'.join(param_urls))
             print(f"[+] {fn}: {len(param_urls)} URLs")
 
         # ── Phase 2: Built-in vulnerability checks (always run) ──
@@ -1230,9 +1245,9 @@ class URLVulnerabilityChecker:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-def MainestVuln(url):
+def MainestVuln(url, scan_dir=None):
     print(f"[*] Dataset dir: {DATASET_DIR or '(current)'}\n[*] Vuln dataset: {VULN_ML_DATASET_FILE}")
-    URLVulnerabilityChecker().check_vulnerabilities(url)
+    URLVulnerabilityChecker(scan_dir=scan_dir).check_vulnerabilities(url)
 
 if __name__ == "__main__":
     MainestVuln(input("Enter The URL: "))

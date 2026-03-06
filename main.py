@@ -895,14 +895,15 @@ def main():
         print("*"*64)
         phase1_pred = show_phase_prediction(scanner, phase=1, url=Target)
 
-        if url_connection.MainRecon(Target):
+        recon_dir = url_connection.MainRecon(Target)
+        if recon_dir:
             print("\n[+] Recon complete, running full vulnerability scan...")
 
      
         print("\n[*] Running ML-guided active vulnerability tests...")
         quick_vulns = scanner.smart_vulnerability_scan(MODEL_FILE)
 
-        URL_checkIfhaveVun.MainestVuln(Target)
+        URL_checkIfhaveVun.MainestVuln(Target, scan_dir=recon_dir)
 
    
         print("\n" + "*"*64)

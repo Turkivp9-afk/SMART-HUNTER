@@ -578,7 +578,7 @@ class ReconWebSite:
         print(f"\n[*] Fuzzing: {base_url}")
         if not os.path.exists("script/fuzzing_command_Tools.sh"):
             print("[-] fuzzing_command_Tools.sh not found"); return None
-        open("fuzzing_Target.txt", "w").write(base_url)
+        open(os.path.join(self.scan_dir, "fuzzing_Target.txt"), "w").write(base_url)
         result = subprocess.run(['bash', "script/fuzzing_command_Tools.sh", base_url], capture_output=True, text=True)
         if result.returncode != 0:
             print(f"[-] Fuzz script failed (rc={result.returncode}):\n{result.stderr}")
@@ -670,13 +670,16 @@ def test_connection(url):
 
 
 def MainRecon(url):
+    recon_scan_dir = None
     try:
         print(f"[*] Saving to: {DATASET_DIR or '(current dir)'}\n[*] ML file : {ML_DATASET_FILE}")
         recon = ReconWebSite(url)
+        recon_scan_dir = recon.scan_dir
         response, recon_obj = test_connection(url)
 
         if response and recon_obj:
             recon = recon_obj
+            recon_scan_dir = recon.scan_dir
             print("\n[*] WAF check...")
             recon.detect_waf(response)
             recon.print_security_summary(response)
@@ -720,7 +723,7 @@ def MainRecon(url):
     except Exception as e:
         import traceback
         print(f"[-] Error: {e}"); traceback.print_exc()
-    return True
+    return recon_scan_dir
 
 
 if __name__ == "__main__":
