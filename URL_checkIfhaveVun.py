@@ -1,4 +1,4 @@
-import hashlib, re, os, time, subprocess, json, urllib.parse, random, string, warnings
+import hashlib, re, os, time, subprocess, json, urllib.parse, random, string, warnings, shutil
 import httpx, pandas as pd, requests
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -140,27 +140,34 @@ class URLVulnerabilityChecker:
     # ── SQLMap ─────────────────────────────────────────────────────────────
     def check_sql_injection_with_sqlmap(self):
         print("\n[+] Checking SQL Injection with SQLMap")
-        script = "/mnt/c/Users/awad/Downloads/pyarmor/auto_PenTest/script/run_sqlmap.sh"
-        if not os.path.exists(script):
-            print("    [-] SQLMap script not found"); return
+        if not shutil.which('sqlmap'):
+            print("    [-] sqlmap not found in PATH"); return
         try:
             with open("sqli_parameters.txt") as f:
                 urls = [l.strip() for l in f if l.strip()]
             if not urls: print("    [-] No URLs in sqli_parameters.txt"); return
             print(f"    [*] Testing {len(urls)} URL(s) in bulk mode")
-            
+
             out_dir = os.path.join(os.path.abspath(self.scan_dir), "sqlmap_results")
             os.makedirs(out_dir, exist_ok=True)
-            
+
             target_list = "sqli_parameters.txt"
-            proc = subprocess.Popen(['bash', script, target_list, out_dir],
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            for line in proc.stdout:
-                line_str = line.strip()
-                if any(k in line_str.lower() for k in ['vulnerable','injection point','confirmed','payload:','parameter:','type:','backend dbms','testing connection','testing if']):
-                    print(f"        {line_str}")
+            log_file = os.path.join(out_dir, "sqlmap.log")
+            proc = subprocess.Popen(
+                ['sqlmap', '-m', target_list,
+                 '--batch', '--forms', '--crawl=1',
+                 '--level=1', '--risk=1', '--threads=10',
+                 '--timeout=10', '--retries=1', '--time-sec=2',
+                 '--smart', '--random-agent'],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            with open(log_file, 'w') as lf:
+                for line in proc.stdout:
+                    lf.write(line)
+                    line_str = line.strip()
+                    if any(k in line_str.lower() for k in ['vulnerable','injection point','confirmed','payload:','parameter:','type:','backend dbms','testing connection','testing if']):
+                        print(f"        {line_str}")
             proc.wait()
-            
+
             if os.path.exists(out_dir):
                 vulns = self.parse_sqlmap_results(target_list, out_dir)
                 if vulns:
@@ -321,7 +328,8 @@ class URLVulnerabilityChecker:
         url_timeout    – seconds before killing a stuck dalfox instance
         """
         print("\n[+] Checking XSS with dalfox...")
-        script   = "/mnt/c/Users/awad/Downloads/pyarmor/auto_PenTest/script/run_dalfox.sh"
+        if not shutil.which('dalfox'):
+            print("    [-] dalfox not found in PATH"); return False
         out_file = os.path.join(os.path.abspath(self.scan_dir), "dalfox_results.txt")
         os.makedirs(self.scan_dir, exist_ok=True)
 
@@ -346,8 +354,9 @@ class URLVulnerabilityChecker:
         with open(urls_file, 'w') as fh:
             fh.write('\n'.join(urls) + '\n')
 
-        cmd = ['bash', script, urls_file, out_file,
-               str(parallel_jobs), str(url_timeout)]
+        cmd = ['dalfox', 'file', urls_file,
+               '-w', str(parallel_jobs * 10),
+               '--output', out_file]
         print(f"    [*] Command: {' '.join(cmd)}")
         print("    " + "-" * 50)
 
@@ -359,8 +368,7 @@ class URLVulnerabilityChecker:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                cwd=os.path.dirname(script)
+                text=True
             )
             _SHOW_KEYWORDS = (
                 'vulnerable', 'poc', 'xss', '[!]', 'found',
@@ -469,9 +477,8 @@ class URLVulnerabilityChecker:
     # ── Commix ────────────────────────────────────────────────────────────
     def check_command_injection_with_commix(self):
         print("\n[+] Checking Command Injection with Commix...")
-        script = "/mnt/c/Users/awad/Downloads/pyarmor/auto_PenTest/script/run_commix.sh"
-        if not os.path.exists(script):
-            print(f"    [-] Script not found: {script}"); return
+        if not shutil.which('commix'):
+            print("    [-] commix not found in PATH"); return
         TIMEOUT = 3600
         try:
             if not os.path.exists("rce_parameters.txt"):
@@ -488,8 +495,10 @@ class URLVulnerabilityChecker:
                 uhash  = hashlib.md5(url.encode()).hexdigest()[:8]
                 url_dir = os.path.join(subdir, f"scan_{uhash}")
                 os.makedirs(url_dir, exist_ok=True)
-                proc = subprocess.Popen(['bash', script, url, url_dir],
-                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                proc = subprocess.Popen(
+                    ['commix', '--url', url, '--batch', '--random-agent',
+                     '--smart', '--timeout=5', f'--output-dir={url_dir}'],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 t0 = last_act = time.time()
                 vuln_det, lines = False, []
                 while True:

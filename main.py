@@ -1,5 +1,5 @@
-import re, os, time, subprocess, traceback, warnings,sys
-import numpy as np, pandas as pd, joblib, httpx, urllib.parse, requests,ipaddress
+import re, os, time, subprocess, traceback, warnings, sys, shutil
+import numpy as np, pandas as pd, joblib, httpx, urllib.parse, requests, ipaddress
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.model_selection import train_test_split
@@ -942,6 +942,57 @@ def main():
             print(f"[-] Invalid target: {Target}")
 
 
+def check_and_install_tools(tools_file="tools.txt"):
+    if not os.path.exists(tools_file):
+        print(f"[!] {tools_file} not found — skipping tool check")
+        return
+
+    missing = []
+    print("\n[*] Checking required tools...")
+    with open(tools_file, encoding='utf-8') as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split('|')
+            if len(parts) < 2:
+                continue
+            tool, install_cmd = parts[0].strip(), parts[1].strip()
+            if not shutil.which(tool):
+                missing.append((tool, install_cmd))
+                print(f"    [-] NOT FOUND: {tool}")
+            else:
+                print(f"    [+] OK: {tool}")
+
+    if not missing:
+        print("[+] All tools are installed.\n")
+        return
+
+    print(f"\n[!] {len(missing)} missing tool(s): {', '.join(t for t,_ in missing)}")
+    try:
+        ans = input("Install missing tools automatically? (y/n): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        ans = 'n'
+
+    if ans != 'y':
+        print("[!] Skipping installation. Some features may not work.\n")
+        return
+
+    for tool, install_cmd in missing:
+        print(f"\n[*] Installing {tool}...")
+        print(f"    CMD: {install_cmd}")
+        ret = subprocess.run(install_cmd, shell=True)
+        if ret.returncode == 0:
+            if shutil.which(tool):
+                print(f"    [+] {tool} installed successfully")
+            else:
+                print(f"    [!] {tool} installed but not in PATH — add ~/go/bin to PATH if it's a Go tool")
+        else:
+            print(f"    [-] Failed to install {tool} (exit code {ret.returncode})")
+    print()
+
+
 if __name__ == "__main__":
     typewriter(msg)
+    check_and_install_tools()
     main()
